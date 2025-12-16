@@ -8,7 +8,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Loader2, CheckCircle2, AlertCircle, RefreshCw, Download } from 'lucide-react';
 import { supabase } from '@/lib/customSupabaseClient';
-import { collectGoogleAdsData, testGoogleAdsConnection } from '@/lib/googleAdsApi';
+import { collectGoogleAdsData, getGoogleAdsNodeBaseUrl, testGoogleAdsConnection } from '@/lib/googleAdsApi';
 import { KeywordAnalyzer, QualityScoreAnalyzer } from '@/lib/googleAdsAnalyzer';
 import { GoogleAdsRecommendationEngine } from '@/lib/googleAdsRecommendationEngine';
 import GoogleAdsAnalysisView from './GoogleAdsAnalysisView';
@@ -77,7 +77,7 @@ export function GoogleAdsIntegration({ client }) {
       if (sessionError) throw sessionError;
       if (!session?.access_token) throw new Error('Sessão expirada. Faça login novamente.');
 
-      const baseUrl = import.meta.env.VITE_GOOGLE_ADS_NODE_URL || 'http://localhost:3001';
+      const baseUrl = getGoogleAdsNodeBaseUrl();
       const response = await fetch(
         `${baseUrl}/api/google-ads/oauth/start?clientId=${encodeURIComponent(client.id)}`,
         {

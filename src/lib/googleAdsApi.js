@@ -1,8 +1,22 @@
 import { supabase } from '@/lib/customSupabaseClient';
 import { fetchWithSupabaseAuth } from '@/lib/nodeAuthFetch';
 
+function normalizeBaseUrl(url) {
+  return String(url || '').trim().replace(/\/+$/g, '');
+}
+
 function getNodeBaseUrl() {
-  return import.meta.env.VITE_GOOGLE_ADS_NODE_URL || 'http://localhost:3001';
+  // Preferência: VITE_GOOGLE_ADS_NODE_URL
+  // Compat: VITE_API_BASE_URL (se você já usa esse nome no Render)
+  const raw =
+    import.meta.env.VITE_GOOGLE_ADS_NODE_URL ||
+    import.meta.env.VITE_API_BASE_URL ||
+    'http://localhost:3001';
+  return normalizeBaseUrl(raw);
+}
+
+export function getGoogleAdsNodeBaseUrl() {
+  return getNodeBaseUrl();
 }
 
 /**
