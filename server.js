@@ -58,7 +58,10 @@ app.use(
     },
   })
 );
-app.use(express.json());
+// O Google Ads Script pode enviar payloads grandes (assetsRows etc.).
+// Se o limite ficar no padrão (100kb), o Express retorna 413 antes de chegar nas rotas.
+app.use(express.json({ limit: '25mb' }));
+app.use(express.urlencoded({ limit: '25mb', extended: true }));
 
 // Inicializar Supabase (Service Role Key para bypass RLS)
 const supabaseUrl = process.env.SUPABASE_URL;
