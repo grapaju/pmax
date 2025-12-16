@@ -240,6 +240,127 @@ function mapAssetsRow(row, { fallbackStart, fallbackEnd, fallbackCampaignId, fal
   };
 }
 
+function mapPmaxSearchTermInsightRow(row, { fallbackStart, fallbackEnd, fallbackCampaignId, fallbackCampaignName }) {
+  const date = parseDate(pick(row, ['date', 'day', 'data', 'dia']));
+  const start = date || fallbackStart;
+  const end = date || fallbackEnd;
+
+  const campaignId = String(pick(row, ['campaign_id', 'campaignId', 'campaign']) || fallbackCampaignId || '').trim();
+  const campaignName = String(pick(row, ['campaign_name', 'campaignName', 'campanha', 'campaign']) || fallbackCampaignName || '').trim();
+  const categoryLabel = pick(row, ['category_label', 'categoryLabel', 'categoria', 'category']);
+
+  if (!campaignId || !campaignName || !categoryLabel || !start || !end) {
+    return { ok: false, reason: 'missing_required_fields' };
+  }
+
+  const impressions = parseNumber(pick(row, ['impressions', 'impressoes', 'impressões'])) ?? 0;
+  const clicks = parseNumber(pick(row, ['clicks', 'cliques'])) ?? 0;
+  const cost = parseNumber(pick(row, ['cost', 'custo', 'spend', 'gasto'])) ?? 0;
+  const conversions = parseNumber(pick(row, ['conversions', 'conversoes', 'conversões'])) ?? 0;
+  const conversionValue = parseNumber(pick(row, ['conversion_value', 'conversionValue', 'valor_conversao', 'valor de conversao', 'valor de conversão'])) ?? 0;
+
+  return {
+    ok: true,
+    value: {
+      campaign_id: campaignId,
+      campaign_name: campaignName,
+      category_label: String(categoryLabel).trim(),
+      date_range_start: start,
+      date_range_end: end,
+      impressions: Math.round(impressions),
+      clicks: Math.round(clicks),
+      cost,
+      conversions,
+      conversion_value: conversionValue,
+      raw_json: row,
+    },
+  };
+}
+
+function mapPmaxShoppingRow(row, { fallbackStart, fallbackEnd, fallbackCampaignId, fallbackCampaignName }) {
+  const date = parseDate(pick(row, ['date', 'day', 'data', 'dia']));
+  const start = date || fallbackStart;
+  const end = date || fallbackEnd;
+
+  const campaignId = String(pick(row, ['campaign_id', 'campaignId', 'campaign']) || fallbackCampaignId || '').trim();
+  const campaignName = String(pick(row, ['campaign_name', 'campaignName', 'campanha', 'campaign']) || fallbackCampaignName || '').trim();
+
+  const productItemId = pick(row, ['product_item_id', 'productItemId', 'item_id', 'offer_id', 'offerId']);
+  const productTitle = pick(row, ['product_title', 'productTitle', 'title']);
+  const productBrand = pick(row, ['product_brand', 'productBrand', 'brand']);
+  const productTypeL1 = pick(row, ['product_type_l1', 'productTypeL1', 'product_type', 'productType']);
+
+  // Pelo menos uma dimensão do feed precisa existir, senão não tem utilidade.
+  const hasDim = Boolean(
+    (productItemId && String(productItemId).trim()) ||
+    (productTitle && String(productTitle).trim()) ||
+    (productBrand && String(productBrand).trim()) ||
+    (productTypeL1 && String(productTypeL1).trim())
+  );
+
+  if (!campaignId || !campaignName || !hasDim || !start || !end) {
+    return { ok: false, reason: 'missing_required_fields' };
+  }
+
+  const impressions = parseNumber(pick(row, ['impressions', 'impressoes', 'impressões'])) ?? 0;
+  const clicks = parseNumber(pick(row, ['clicks', 'cliques'])) ?? 0;
+  const cost = parseNumber(pick(row, ['cost', 'custo', 'spend', 'gasto'])) ?? 0;
+  const conversions = parseNumber(pick(row, ['conversions', 'conversoes', 'conversões'])) ?? 0;
+  const conversionValue = parseNumber(pick(row, ['conversion_value', 'conversionValue', 'valor_conversao', 'valor de conversao', 'valor de conversão'])) ?? 0;
+
+  return {
+    ok: true,
+    value: {
+      campaign_id: campaignId,
+      campaign_name: campaignName,
+      product_item_id: productItemId ? String(productItemId).trim() : null,
+      product_title: productTitle ? String(productTitle).trim() : null,
+      product_brand: productBrand ? String(productBrand).trim() : null,
+      product_type_l1: productTypeL1 ? String(productTypeL1).trim() : null,
+      date_range_start: start,
+      date_range_end: end,
+      impressions: Math.round(impressions),
+      clicks: Math.round(clicks),
+      cost,
+      conversions,
+      conversion_value: conversionValue,
+      raw_json: row,
+    },
+  };
+}
+
+function mapPmaxAudienceSignalRow(row, { fallbackStart, fallbackEnd, fallbackCampaignId, fallbackCampaignName }) {
+  const date = parseDate(pick(row, ['date', 'day', 'data', 'dia']));
+  const start = date || fallbackStart;
+  const end = date || fallbackEnd;
+
+  const campaignId = String(pick(row, ['campaign_id', 'campaignId', 'campaign']) || fallbackCampaignId || '').trim();
+  const campaignName = String(pick(row, ['campaign_name', 'campaignName', 'campanha', 'campaign']) || fallbackCampaignName || '').trim();
+  const assetGroupId = String(pick(row, ['asset_group_id', 'assetGroupId', 'asset_group']) || '').trim();
+  const assetGroupName = pick(row, ['asset_group_name', 'assetGroupName', 'asset_group_name']);
+  const signalType = pick(row, ['signal_type', 'signalType', 'type']);
+  const signalValue = pick(row, ['signal_value', 'signalValue', 'value']);
+
+  if (!campaignId || !campaignName || !assetGroupId || !start || !end) {
+    return { ok: false, reason: 'missing_required_fields' };
+  }
+
+  return {
+    ok: true,
+    value: {
+      campaign_id: campaignId,
+      campaign_name: campaignName,
+      asset_group_id: assetGroupId,
+      asset_group_name: assetGroupName ? String(assetGroupName).trim() : null,
+      signal_type: signalType ? String(signalType).trim() : null,
+      signal_value: signalValue ? String(signalValue).trim() : null,
+      date_range_start: start,
+      date_range_end: end,
+      raw_json: row,
+    },
+  };
+}
+
 export function createGoogleAdsScriptIngestRouter({ supabase }) {
   const router = express.Router();
 
@@ -286,10 +407,21 @@ export function createGoogleAdsScriptIngestRouter({ supabase }) {
       const metricsRows = Array.isArray(req.body?.metricsRows) ? req.body.metricsRows : [];
       const adsRows = Array.isArray(req.body?.adsRows) ? req.body.adsRows : [];
       const assetsRows = Array.isArray(req.body?.assetsRows) ? req.body.assetsRows : [];
+      const searchTermInsightsRows = Array.isArray(req.body?.searchTermInsightsRows) ? req.body.searchTermInsightsRows : [];
+      const shoppingRows = Array.isArray(req.body?.shoppingRows) ? req.body.shoppingRows : [];
+      const audienceSignalsRows = Array.isArray(req.body?.audienceSignalsRows) ? req.body.audienceSignalsRows : [];
 
-      if (campaignsRows.length === 0 && metricsRows.length === 0 && adsRows.length === 0 && assetsRows.length === 0) {
+      if (
+        campaignsRows.length === 0 &&
+        metricsRows.length === 0 &&
+        adsRows.length === 0 &&
+        assetsRows.length === 0 &&
+        searchTermInsightsRows.length === 0 &&
+        shoppingRows.length === 0 &&
+        audienceSignalsRows.length === 0
+      ) {
         return res.status(400).json({
-          error: 'Envie campaignsRows, metricsRows, adsRows e/ou assetsRows',
+          error: 'Envie campaignsRows, metricsRows, adsRows, assetsRows e/ou novos datasets (searchTermInsightsRows, shoppingRows, audienceSignalsRows)',
           code: 'NO_ROWS',
         });
       }
@@ -302,6 +434,9 @@ export function createGoogleAdsScriptIngestRouter({ supabase }) {
         ...metricsRows.map((r) => ({ ...r, __kind: 'metrics' })),
         ...adsRows.map((r) => ({ ...r, __kind: 'ads' })),
         ...assetsRows.map((r) => ({ ...r, __kind: 'assets' })),
+        ...searchTermInsightsRows.map((r) => ({ ...r, __kind: 'pmax_search_term_insights' })),
+        ...shoppingRows.map((r) => ({ ...r, __kind: 'pmax_shopping' })),
+        ...audienceSignalsRows.map((r) => ({ ...r, __kind: 'pmax_audience_signals' })),
       ];
       const headers = getHeadersFromRows(rawRows);
 
@@ -375,6 +510,9 @@ export function createGoogleAdsScriptIngestRouter({ supabase }) {
         metrics: { received: metricsRows.length, mapped: 0, upserted: 0, skipped: 0 },
         ads: { received: adsRows.length, mapped: 0, upserted: 0, skipped: 0 },
         assets: { received: assetsRows.length, mapped: 0, upserted: 0, skipped: 0 },
+        pmaxSearchTermInsights: { received: searchTermInsightsRows.length, mapped: 0, upserted: 0, skipped: 0 },
+        pmaxShopping: { received: shoppingRows.length, mapped: 0, upserted: 0, skipped: 0 },
+        pmaxAudienceSignals: { received: audienceSignalsRows.length, mapped: 0, upserted: 0, skipped: 0 },
         warnings: [],
       };
 
@@ -440,6 +578,57 @@ export function createGoogleAdsScriptIngestRouter({ supabase }) {
         assetsUpserts.push({ ...mapped.value, client_id: clientId, collected_at: nowIso });
       }
 
+      // search term insights (PMax)
+      const pmaxSearchTermInsightsUpserts = [];
+      for (const r of searchTermInsightsRows) {
+        const mapped = mapPmaxSearchTermInsightRow(r, {
+          fallbackStart: start,
+          fallbackEnd: end,
+          fallbackCampaignId: campaignId,
+          fallbackCampaignName: campaignName,
+        });
+        if (!mapped.ok) {
+          applySummary.pmaxSearchTermInsights.skipped++;
+          continue;
+        }
+        applySummary.pmaxSearchTermInsights.mapped++;
+        pmaxSearchTermInsightsUpserts.push({ ...mapped.value, client_id: clientId, collected_at: nowIso });
+      }
+
+      // shopping performance (PMax)
+      const pmaxShoppingUpserts = [];
+      for (const r of shoppingRows) {
+        const mapped = mapPmaxShoppingRow(r, {
+          fallbackStart: start,
+          fallbackEnd: end,
+          fallbackCampaignId: campaignId,
+          fallbackCampaignName: campaignName,
+        });
+        if (!mapped.ok) {
+          applySummary.pmaxShopping.skipped++;
+          continue;
+        }
+        applySummary.pmaxShopping.mapped++;
+        pmaxShoppingUpserts.push({ ...mapped.value, client_id: clientId, collected_at: nowIso });
+      }
+
+      // audience signals (PMax)
+      const pmaxAudienceSignalsUpserts = [];
+      for (const r of audienceSignalsRows) {
+        const mapped = mapPmaxAudienceSignalRow(r, {
+          fallbackStart: start,
+          fallbackEnd: end,
+          fallbackCampaignId: campaignId,
+          fallbackCampaignName: campaignName,
+        });
+        if (!mapped.ok) {
+          applySummary.pmaxAudienceSignals.skipped++;
+          continue;
+        }
+        applySummary.pmaxAudienceSignals.mapped++;
+        pmaxAudienceSignalsUpserts.push({ ...mapped.value, client_id: clientId, collected_at: nowIso });
+      }
+
       let status = 'success';
       let errorMessage = null;
       const appliedTables = [];
@@ -496,6 +685,45 @@ export function createGoogleAdsScriptIngestRouter({ supabase }) {
           }
           appliedTables.push('google_ads_assets');
         }
+
+        if (pmaxSearchTermInsightsUpserts.length > 0) {
+          const chunkSize2 = 500;
+          for (let offset = 0; offset < pmaxSearchTermInsightsUpserts.length; offset += chunkSize2) {
+            const chunk = pmaxSearchTermInsightsUpserts.slice(offset, offset + chunkSize2);
+            const { error } = await supabase
+              .from('google_ads_pmax_search_term_insights')
+              .upsert(chunk, { onConflict: 'client_id,campaign_id,category_label,date_range_start,date_range_end' });
+            if (error) throw error;
+            applySummary.pmaxSearchTermInsights.upserted += chunk.length;
+          }
+          appliedTables.push('google_ads_pmax_search_term_insights');
+        }
+
+        if (pmaxShoppingUpserts.length > 0) {
+          const chunkSize2 = 500;
+          for (let offset = 0; offset < pmaxShoppingUpserts.length; offset += chunkSize2) {
+            const chunk = pmaxShoppingUpserts.slice(offset, offset + chunkSize2);
+            const { error } = await supabase
+              .from('google_ads_pmax_shopping_performance')
+              .upsert(chunk, { onConflict: 'client_id,campaign_id,product_item_id,product_title,product_brand,product_type_l1,date_range_start,date_range_end' });
+            if (error) throw error;
+            applySummary.pmaxShopping.upserted += chunk.length;
+          }
+          appliedTables.push('google_ads_pmax_shopping_performance');
+        }
+
+        if (pmaxAudienceSignalsUpserts.length > 0) {
+          const chunkSize2 = 500;
+          for (let offset = 0; offset < pmaxAudienceSignalsUpserts.length; offset += chunkSize2) {
+            const chunk = pmaxAudienceSignalsUpserts.slice(offset, offset + chunkSize2);
+            const { error } = await supabase
+              .from('google_ads_pmax_audience_signals')
+              .upsert(chunk, { onConflict: 'client_id,campaign_id,asset_group_id,signal_type,signal_value,date_range_start,date_range_end' });
+            if (error) throw error;
+            applySummary.pmaxAudienceSignals.upserted += chunk.length;
+          }
+          appliedTables.push('google_ads_pmax_audience_signals');
+        }
       } catch (err) {
         status = 'error';
         errorMessage = err?.message || String(err);
@@ -528,7 +756,10 @@ export function createGoogleAdsScriptIngestRouter({ supabase }) {
             (applySummary.campaigns.upserted || 0) +
             (applySummary.metrics.upserted || 0) +
             (applySummary.ads.upserted || 0) +
-            (applySummary.assets.upserted || 0),
+            (applySummary.assets.upserted || 0) +
+            (applySummary.pmaxSearchTermInsights.upserted || 0) +
+            (applySummary.pmaxShopping.upserted || 0) +
+            (applySummary.pmaxAudienceSignals.upserted || 0),
         },
       ]);
 

@@ -11,7 +11,6 @@ const AddClientDialog = ({ isOpen, onClose, onAdd }) => {
     name: '',
     email: '',
     clientId: '',
-    googleAdsCustomerId: '',
   });
   const [loading, setLoading] = useState(false);
 
@@ -20,7 +19,7 @@ const AddClientDialog = ({ isOpen, onClose, onAdd }) => {
     setLoading(true);
     await onAdd(formData);
     setLoading(false);
-    setFormData({ name: '', email: '', clientId: '', googleAdsCustomerId: '' });
+    setFormData({ name: '', email: '', clientId: '' });
   };
 
   return (
@@ -67,17 +66,7 @@ const AddClientDialog = ({ isOpen, onClose, onAdd }) => {
             />
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="googleAdsCustomerId">ID da Conta Google Ads (Opcional)</Label>
-            <Input
-              id="googleAdsCustomerId"
-              value={formData.googleAdsCustomerId}
-              onChange={(e) => setFormData({ ...formData, googleAdsCustomerId: e.target.value })}
-              className="bg-zinc-800 border-zinc-700"
-              placeholder="123-456-7890"
-            />
-            <p className="text-xs text-zinc-500">ID da conta do cliente no Google Ads</p>
-          </div>
+          
           
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={onClose} disabled={loading}>

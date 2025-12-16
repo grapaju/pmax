@@ -2,6 +2,47 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import { ArrowUpRight, ArrowDownRight, Minus } from 'lucide-react';
 
+const KPI_TOOLTIPS = {
+  ROAS: 'Retorno sobre o gasto com anúncios (valor de conversão ÷ custo). Quanto maior, melhor.',
+  CPA: 'Custo por aquisição/conversão (custo ÷ conversões). Quanto menor, melhor.',
+  CPC: 'Custo por clique (custo ÷ cliques).',
+  CTR: 'Taxa de cliques (cliques ÷ impressões). Indica o quanto o anúncio chama atenção.',
+  CVR: 'Taxa de conversão (conversões ÷ cliques).',
+  CPM: 'Custo por mil impressões. Útil para medir alcance/visibilidade.',
+};
+
+function renderWithKpiTooltips(text) {
+  if (typeof text !== 'string') return text;
+
+  const re = /\b(ROAS|CPA|CPC|CTR|CVR|CPM)\b/g;
+  const parts = [];
+  let lastIndex = 0;
+  let match;
+
+  // eslint-disable-next-line no-cond-assign
+  while ((match = re.exec(text)) !== null) {
+    const idx = match.index;
+    const token = match[1];
+    if (idx > lastIndex) parts.push(text.slice(lastIndex, idx));
+
+    parts.push(
+      <abbr
+        key={`${token}-${idx}`}
+        title={KPI_TOOLTIPS[token]}
+        className="underline decoration-dotted underline-offset-2 cursor-help"
+      >
+        {token}
+      </abbr>
+    );
+
+    lastIndex = idx + token.length;
+  }
+
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+  if (parts.length === 0) return text;
+  return <>{parts}</>;
+}
+
 const MetricCard = ({ 
   title, 
   value, 
@@ -67,12 +108,12 @@ const MetricCard = ({
       </div>
       
       <div>
-        <h3 className="text-zinc-400 text-sm font-medium mb-1">{title}</h3>
+        <h3 className="text-zinc-400 text-sm font-medium mb-1">{renderWithKpiTooltips(title)}</h3>
         <div className="flex items-baseline gap-2">
           <span className="text-2xl font-bold text-white">{value}</span>
           {subValue && (
             <span className={`text-xs ${statusColor[status]}`}>
-              {subValue}
+              {renderWithKpiTooltips(subValue)}
             </span>
           )}
         </div>

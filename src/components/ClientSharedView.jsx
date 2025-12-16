@@ -5,6 +5,7 @@ import { Helmet } from 'react-helmet-async';
 import CampaignDashboard from '@/components/CampaignDashboard';
 import { ShieldAlert } from 'lucide-react';
 import { supabase } from '@/lib/customSupabaseClient';
+import { fetchCampaignDashboardData } from '@/lib/googleAdsDashboardLoader';
 
 const ClientSharedView = () => {
   const { clientId } = useParams();
@@ -12,6 +13,7 @@ const ClientSharedView = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [campaigns, setCampaigns] = useState([]);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     const fetchClientData = async () => {
@@ -35,14 +37,22 @@ const ClientSharedView = () => {
             
             // Format first campaign for display
             const mainCampaign = client.campaigns[0];
-            const campaignData = mainCampaign.data || {};
-            
-            setClientData({
-                ...campaignData,
-                id: mainCampaign.id,
-                name: `${client.name} - ${mainCampaign.name}`,
-                budget: mainCampaign.budget
-            });
+
+          let dashboardData = null;
+          try {
+            dashboardData = await fetchCampaignDashboardData({ clientId, period: '30d' });
+          } catch (e) {
+            console.warn('Falha ao carregar google_ads_metrics (shared):', e?.message || e);
+          }
+
+          const fallbackData = mainCampaign.data || {};
+
+          setClientData({
+            ...(dashboardData || fallbackData),
+            id: mainCampaign.id,
+            name: `${client.client_name || client.name} - ${mainCampaign.name}`,
+            budget: mainCampaign.budget
+          });
         } else {
             setError("Nenhuma campanha encontrada para este cliente.");
         }
@@ -58,6 +68,28 @@ const ClientSharedView = () => {
     if (clientId) {
         fetchClientData();
     }
+  }, [clientId, refreshKey]);
+
+  useEffect(() => {
+    if (!clientId) return;
+
+    const channel = supabase
+      .channel('client-shared-google-ads-ingest')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'google_ads_activity_log' },
+        (payload) => {
+          const row = payload?.new;
+          if (!row || row.action !== 'script_ingest') return;
+          if (row.client_id !== clientId) return;
+          setRefreshKey((k) => k + 1);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [clientId]);
 
   if (loading) {

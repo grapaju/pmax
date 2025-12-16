@@ -5,45 +5,114 @@ import { FileText, ChevronDown, ChevronUp, History, Calendar } from 'lucide-reac
 import { Button } from '@/components/ui/button';
 import { supabase } from '@/lib/customSupabaseClient';
 
-const CampaignHistory = ({ clients, selectedClient }) => {
+const isUuid = (v) => typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
+
+const CampaignHistory = ({ clients, selectedClient, clientId, campaignId }) => {
   const [history, setHistory] = useState([]);
   const [expandedCampaign, setExpandedCampaign] = useState(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     const fetchHistory = async () => {
-        if (!selectedClient) return;
+                if (!selectedClient && !clientId) return;
         setLoading(true);
         try {
-            // Fetch history where campaign belongs to client
-            // Since we can't join directly easily in one query for nested filtering in client-side Supabase lib sometimes
-            // We get campaign IDs first or assume selectedClient has campaigns
-            const campaignIds = (selectedClient.campaigns || []).map(c => c.id);
-            
-            if (campaignIds.length === 0) {
-                setHistory([]);
-                return;
-            }
+                        const effectiveClientId = clientId || selectedClient?.id;
+                        const campaignIds = (selectedClient?.campaigns || []).map(c => c.id).filter(Boolean);
+                        const useCampaignHistory = campaignIds.length > 0 && campaignIds.every((id) => isUuid(String(id)));
 
-            const { data, error } = await supabase
-                .from('campaign_history')
-                .select('*')
-                .in('campaign_id', campaignIds)
-                .order('created_at', { ascending: false });
-            
-            if (error) throw error;
-            
-            // Map data to display format
-            const mappedHistory = data.map(h => ({
-                id: h.id,
-                campaign_name: selectedClient.campaigns.find(c => c.id === h.campaign_id)?.name || 'Desconhecido',
-                upload_date: h.created_at,
-                period_start: h.period_start,
-                period_end: h.period_end,
-                stats: h.data?.totals || { roas: 0, cpa: 0, conversions: 0 }
-            }));
+                        if (useCampaignHistory) {
+                            const { data, error } = await supabase
+                                .from('campaign_history')
+                                .select('*')
+                                .in('campaign_id', campaignIds)
+                                .order('created_at', { ascending: false });
+                            if (error) throw error;
 
-            setHistory(mappedHistory);
+                            const mappedHistory = (data || []).map(h => ({
+                                    id: h.id,
+                                    campaign_name: selectedClient.campaigns.find(c => c.id === h.campaign_id)?.name || 'Desconhecido',
+                                    upload_date: h.created_at,
+                                    period_start: h.period_start,
+                                    period_end: h.period_end,
+                                    stats: h.data?.totals || { roas: 0, cpa: 0, conversions: 0 }
+                            }));
+
+                            setHistory(mappedHistory);
+                            return;
+                        }
+
+                        // Modo ingest (google_ads_raw_imports + google_ads_metrics)
+                        const { data: imports, error: importsError } = await supabase
+                            .from('google_ads_raw_imports')
+                            .select('id, created_at, date_range_start, date_range_end, source, report_name, applied_status, applied_summary')
+                            .eq('client_id', effectiveClientId)
+                            .order('created_at', { ascending: false })
+                            .limit(25);
+                        if (importsError) throw importsError;
+
+                        const importsList = imports || [];
+                        if (importsList.length === 0) {
+                            setHistory([]);
+                            return;
+                        }
+
+                        const starts = importsList.map(i => i.date_range_start).filter(Boolean).sort();
+                        const ends = importsList.map(i => i.date_range_end).filter(Boolean).sort();
+                        const minStart = starts[0] || null;
+                        const maxEnd = ends[ends.length - 1] || null;
+
+                        let metricsRows = [];
+                        if (minStart && maxEnd) {
+                            let mq = supabase
+                                .from('google_ads_metrics')
+                                .select('date_range_start, cost, conversions, conversion_value')
+                                .eq('client_id', effectiveClientId)
+                                .gte('date_range_start', minStart)
+                                .lte('date_range_start', maxEnd);
+
+                            // Se campaignId estiver disponível e for um id do Google Ads, filtra
+                            if (campaignId && !isUuid(String(campaignId))) {
+                                mq = mq.eq('campaign_id', String(campaignId));
+                            }
+
+                            const { data: mdata, error: merror } = await mq;
+                            if (merror) throw merror;
+                            metricsRows = mdata || [];
+                        }
+
+                        const mapped = importsList.map((imp) => {
+                            const start = imp.date_range_start;
+                            const end = imp.date_range_end;
+                            const inRange = (r) => {
+                                if (!start || !end) return false;
+                                const d = r.date_range_start;
+                                return d >= start && d <= end;
+                            };
+
+                            const totals = metricsRows.filter(inRange).reduce((acc, r) => {
+                                acc.cost += Number(r.cost || 0);
+                                acc.conversions += Number(r.conversions || 0);
+                                acc.value += Number(r.conversion_value || 0);
+                                return acc;
+                            }, { cost: 0, conversions: 0, value: 0 });
+
+                            const roas = totals.cost > 0 ? totals.value / totals.cost : 0;
+                            const cpa = totals.conversions > 0 ? totals.cost / totals.conversions : 0;
+
+                            const name = imp.report_name || (imp.source === 'google_ads_script' ? 'Ingest via Script' : 'Import Google Ads');
+
+                            return {
+                                id: imp.id,
+                                campaign_name: name,
+                                upload_date: imp.created_at,
+                                period_start: start,
+                                period_end: end,
+                                stats: { roas, cpa, conversions: totals.conversions },
+                            };
+                        });
+
+                        setHistory(mapped);
 
         } catch (err) {
             console.error("Error fetching history:", err);
@@ -52,8 +121,8 @@ const CampaignHistory = ({ clients, selectedClient }) => {
         }
     };
 
-    fetchHistory();
-  }, [selectedClient]);
+        fetchHistory();
+    }, [selectedClient, clientId, campaignId]);
 
   const toggleExpand = (id) => {
     setExpandedCampaign(expandedCampaign === id ? null : id);

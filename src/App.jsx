@@ -6,7 +6,6 @@ import Login from '@/components/Login';
 import ManagerDashboard from '@/components/ManagerDashboard';
 import ClientDashboard from '@/components/ClientDashboard'; 
 import ClientSharedView from '@/components/ClientSharedView'; 
-import GoogleOAuthCallback from '@/components/GoogleOAuthCallback';
 import { Toaster } from '@/components/ui/toaster';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 
@@ -68,12 +67,7 @@ function App() {
             </>
         } />
         
-        <Route path="/oauth/callback" element={
-            <>
-                <Helmet><title>Autorização Google Ads</title></Helmet>
-                <GoogleOAuthCallback />
-            </>
-        } />
+        <Route path="/oauth/callback" element={<Navigate to="/" replace />} />
         
         <Route path="/client/:clientId" element={<ClientSharedView />} />
 

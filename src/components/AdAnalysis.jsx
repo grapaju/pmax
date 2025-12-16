@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { 
   AlertTriangle, CheckCircle2, TrendingUp, TrendingDown, 
   MousePointerClick, Eye, Target, DollarSign, Lightbulb,
@@ -11,84 +11,304 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { supabase } from '@/lib/customSupabaseClient';
+import { periodToDateRange } from '@/lib/googleAdsDashboardLoader';
 
-const AdAnalysis = ({ targetRoas = 4, targetCpa = 45 }) => {
-  // Mock Data for Ads
-  const [ads] = useState([
-    {
-      id: 1,
-      headline: "Promoção de Tênis Esportivos | Frete Grátis Brasil",
-      description: "A melhor tecnologia para sua corrida. Conforto e desempenho garantidos com 30% OFF.",
-      type: "Responsive Search",
-      assetType: "text",
-      roas: 6.8,
-      ctr: 5.2,
-      conversions: 145,
-      cpa: 22.50,
-      impressions: 25400,
-      clicks: 1320,
-      status: "excellent"
-    },
-    {
-      id: 2,
-      headline: "Coleção Verão 2024 - Chegou a Hora de Brilhar",
-      description: "Novos modelos disponíveis. Parcele em até 10x sem juros no cartão.",
-      type: "Display / Image",
-      assetType: "image",
-      roas: 4.5,
-      ctr: 1.8,
-      conversions: 82,
-      cpa: 38.10,
-      impressions: 45000,
-      clicks: 810,
-      status: "good"
-    },
-    {
-      id: 3,
-      headline: "Oferta Relâmpago: Sapatos Sociais",
-      description: "Elegância e sofisticação para o seu trabalho. Descontos progressivos.",
-      type: "Responsive Search",
-      assetType: "text",
-      roas: 3.9,
-      ctr: 3.1,
-      conversions: 45,
-      cpa: 48.00,
-      impressions: 12000,
-      clicks: 372,
-      status: "average"
-    },
-    {
-      id: 4,
-      headline: "Kit 3 Camisetas Básicas - Algodão Egípcio",
-      description: "O básico que funciona. Alta durabilidade e conforto extremo.",
-      type: "Video Ad",
-      assetType: "video",
-      roas: 2.1,
-      ctr: 0.8,
-      conversions: 12,
-      cpa: 85.50,
-      impressions: 8500,
-      clicks: 68,
-      status: "poor"
-    },
-    {
-      id: 5,
-      headline: "Liquidação de Inverno - Últimas Peças",
-      description: "Garanta seu look de inverno com preços imperdíveis. Estoque limitado.",
-      type: "Display / Image",
-      assetType: "image",
-      roas: 1.5,
-      ctr: 0.5,
-      conversions: 5,
-      cpa: 120.00,
-      impressions: 15000,
-      clicks: 75,
-      status: "poor"
+function normalizeJson(value) {
+  if (!value) return null;
+  if (typeof value === 'object') return value;
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return null;
     }
-  ]);
+  }
+  return null;
+}
 
-  // Sort by performance (ROAS)
-  const sortedAds = [...ads].sort((a, b) => b.roas - a.roas);
+function getByPath(obj, path) {
+  if (!obj || !path) return undefined;
+  const parts = Array.isArray(path) ? path : String(path).split('.');
+  let curr = obj;
+  for (const p of parts) {
+    if (curr && typeof curr === 'object' && p in curr) curr = curr[p];
+    else return undefined;
+  }
+  return curr;
+}
+
+function pickFirstString(...values) {
+  for (const v of values) {
+    if (v === null || v === undefined) continue;
+    const s = String(v).trim();
+    if (s) return s;
+  }
+  return null;
+}
+
+function getAssetDisplayTitle(row) {
+  const json = normalizeJson(row?.raw_json);
+
+  // 1) Campos flat comuns (variações de script)
+  const flat = pickFirstString(
+    json?.asset_text,
+    json?.assetText,
+    json?.headline,
+    json?.long_headline,
+    json?.longHeadline,
+    json?.description,
+    json?.title,
+    json?.asset_name,
+    json?.assetName,
+    json?.name,
+    json?.text,
+    json?.asset_text_asset_text,
+    json?.text_asset_text,
+    json?.textAssetText
+  );
+  if (flat) return flat;
+
+  // 2) Dot-notation (quando o script serializa chaves com ponto)
+  if (json && typeof json === 'object') {
+    const dotted = pickFirstString(
+      json['asset.text_asset.text'],
+      json['asset.textAsset.text'],
+      json['asset.text'],
+      json['asset.name'],
+      json['asset.image_asset.full_size.url'],
+      json['asset.imageAsset.fullSize.url'],
+      json['asset.youtube_video_asset.youtube_video_id'],
+      json['asset.youtubeVideoAsset.youtubeVideoId']
+    );
+    if (dotted) return dotted;
+  }
+
+  // 3) Estruturas aninhadas (GAQL / scripts)
+  const nested = pickFirstString(
+    getByPath(json, 'asset.text_asset.text'),
+    getByPath(json, 'asset.textAsset.text'),
+    getByPath(json, 'asset.text'),
+    getByPath(json, 'asset.name'),
+    getByPath(json, 'asset.image_asset.full_size.url'),
+    getByPath(json, 'asset.imageAsset.fullSize.url'),
+    getByPath(json, 'asset.youtube_video_asset.youtube_video_id'),
+    getByPath(json, 'asset.youtubeVideoAsset.youtubeVideoId')
+  );
+  if (nested) return nested;
+
+  // 4) Fallback por tipo (tenta descobrir algo exibível)
+  const fieldType = String(row?.field_type || '').toUpperCase();
+  if (fieldType.includes('HEADLINE') || fieldType.includes('DESCRIPTION')) {
+    const maybeText = pickFirstString(
+      json?.value,
+      getByPath(json, 'value'),
+      getByPath(json, 'asset.value')
+    );
+    if (maybeText) return maybeText;
+  }
+
+  const maybeUrl = pickFirstString(
+    json?.asset_url,
+    json?.assetUrl,
+    json?.youtube_url,
+    json?.youtubeUrl,
+    json?.url,
+    json?.image_url,
+    json?.imageUrl,
+    getByPath(json, 'image.url'),
+    getByPath(json, 'asset.image.url'),
+    getByPath(json, 'asset.image_asset.full_size.url'),
+    getByPath(json, 'asset.imageAsset.fullSize.url')
+  );
+  if (maybeUrl) return maybeUrl;
+
+  const ytId = pickFirstString(json?.youtube_video_id, json?.youtubeVideoId);
+  if (ytId) return `https://www.youtube.com/watch?v=${ytId}`;
+
+  const assetId = row?.asset_id ? String(row.asset_id).trim() : '';
+  if (assetId) return `Asset ${assetId}`;
+
+  const rn = row?.asset_resource_name ? String(row.asset_resource_name).trim() : '';
+  if (rn) {
+    const short = rn.split('/').filter(Boolean).slice(-1)[0];
+    return short ? `Asset ${short}` : rn;
+  }
+
+  return 'Asset';
+}
+
+const AdAnalysis = ({ clientId, campaignId, period = 'all', targetRoas = 4, targetCpa = 45 }) => {
+  const [assets, setAssets] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const load = async () => {
+      if (!clientId || !campaignId) {
+        setAssets([]);
+        return;
+      }
+
+      setLoading(true);
+      try {
+        const range = periodToDateRange(period);
+        let q = supabase
+          .from('google_ads_assets')
+          .select('asset_resource_name, asset_id, asset_type, field_type, asset_group_id, asset_group_name, performance_label, impressions, clicks, cost, conversions, conversion_value, raw_json, date_range_start')
+          .eq('client_id', clientId)
+          .eq('campaign_id', String(campaignId))
+          .order('date_range_start', { ascending: false });
+
+        if (range) {
+          q = q.gte('date_range_start', range.start).lte('date_range_start', range.end);
+        }
+
+        const { data, error } = await q;
+        if (error) throw error;
+        setAssets(data || []);
+      } catch (e) {
+        console.error('Erro ao carregar google_ads_assets:', e);
+        setAssets([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    load();
+  }, [clientId, campaignId, period]);
+
+  const ads = useMemo(() => {
+    // Agrupa por asset_resource_name + field_type, somando métricas (para evitar duplicados por dia)
+    const m = new Map();
+    for (const r of assets || []) {
+      const key = `${r.asset_resource_name || r.asset_id || ''}::${r.field_type || ''}`;
+      const curr = m.get(key) || {
+        id: key,
+        headline: getAssetDisplayTitle(r),
+        description: r.asset_group_name ? `Grupo: ${r.asset_group_name}` : '',
+        type: r.field_type || r.asset_type || 'Asset',
+        assetType: (() => {
+          const s = String(r.asset_type || '').toLowerCase();
+          if (s.includes('image')) return 'image';
+          if (s.includes('video') || s.includes('youtube')) return 'video';
+          return 'text';
+        })(),
+        roas: 0,
+        ctr: 0,
+        conversions: 0,
+        cpa: 0,
+        impressions: 0,
+        clicks: 0,
+        spend: 0,
+        value: 0,
+        status: 'average',
+        _perf: {},
+      };
+
+      curr.impressions += Number(r.impressions || 0);
+      curr.clicks += Number(r.clicks || 0);
+      curr.spend += Number(r.cost || 0);
+      curr.conversions += Number(r.conversions || 0);
+      curr.value += Number(r.conversion_value || 0);
+
+      const pl = String(r.performance_label || '').toUpperCase();
+      curr._perf[pl] = (curr._perf[pl] || 0) + 1;
+
+      m.set(key, curr);
+    }
+
+    const out = Array.from(m.values()).map((a) => {
+      a.roas = a.spend > 0 ? a.value / a.spend : 0;
+      a.cpa = a.conversions > 0 ? a.spend / a.conversions : 0;
+      a.ctr = a.impressions > 0 ? (a.clicks / a.impressions) * 100 : 0;
+
+      // status aproximado baseado em performance_label ou ROAS
+      const best = a._perf.BEST || 0;
+      const good = a._perf.GOOD || 0;
+      const low = a._perf.LOW || 0;
+      if (best > 0) a.status = 'excellent';
+      else if (good > 0) a.status = 'good';
+      else if (low > 0) a.status = 'poor';
+      else a.status = a.roas >= targetRoas ? 'good' : a.roas >= targetRoas * 0.7 ? 'average' : 'poor';
+
+      return a;
+    });
+
+    // Ordena por ROAS desc, depois por conversões
+    return out.sort((a, b) => (b.roas - a.roas) || (b.conversions - a.conversions));
+  }, [assets, targetRoas]);
+
+  const sortedAds = ads;
+
+  const categorizeAsset = (ad) => {
+    const type = String(ad?.type || '').toUpperCase();
+    const assetType = String(ad?.assetType || '').toLowerCase();
+
+    if (assetType === 'image') return 'imagens';
+    if (assetType === 'video') return 'videos';
+    if (type.includes('HEADLINE')) return 'titulos';
+    if (type.includes('DESCRIPTION')) return 'descricoes';
+    if (type.includes('SITELINK')) return 'sitelinks';
+    if (type.includes('CALLOUT')) return 'callouts';
+    if (type.includes('CALL')) return 'chamadas';
+    return 'outros';
+  };
+
+  const groupedAds = useMemo(() => {
+    const statusRank = (status) => {
+      switch (status) {
+        case 'poor':
+          return 0;
+        case 'average':
+          return 1;
+        case 'good':
+          return 2;
+        case 'excellent':
+          return 3;
+        default:
+          return 9;
+      }
+    };
+
+    const sortWithinGroup = (a, b) => {
+      const sr = statusRank(a?.status) - statusRank(b?.status);
+      if (sr !== 0) return sr;
+
+      const spendA = Number(a?.spend || 0);
+      const spendB = Number(b?.spend || 0);
+      if (spendB !== spendA) return spendB - spendA;
+
+      const convA = Number(a?.conversions || 0);
+      const convB = Number(b?.conversions || 0);
+      if (convB !== convA) return convB - convA;
+
+      const roasA = Number(a?.roas || 0);
+      const roasB = Number(b?.roas || 0);
+      return roasB - roasA;
+    };
+
+    const groups = {
+      titulos: [],
+      descricoes: [],
+      imagens: [],
+      videos: [],
+      sitelinks: [],
+      callouts: [],
+      chamadas: [],
+      outros: [],
+    };
+
+    for (const ad of sortedAds) {
+      const k = categorizeAsset(ad);
+      (groups[k] || groups.outros).push(ad);
+    }
+
+    for (const key of Object.keys(groups)) {
+      groups[key].sort(sortWithinGroup);
+    }
+
+    return groups;
+  }, [sortedAds]);
 
   const getStatusColor = (status) => {
     switch (status) {
@@ -118,6 +338,12 @@ const AdAnalysis = ({ targetRoas = 4, targetCpa = 45 }) => {
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
+
+      {loading && (
+        <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-xl text-zinc-400 text-sm">
+          Carregando análise de anúncios/recursos...
+        </div>
+      )}
       
       {/* Header Summary */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -127,7 +353,10 @@ const AdAnalysis = ({ targetRoas = 4, targetCpa = 45 }) => {
           </div>
           <div>
             <p className="text-sm text-zinc-500">Melhor Anúncio (ROAS)</p>
-            <p className="text-xl font-bold text-white">{sortedAds[0].roas}x <span className="text-xs font-normal text-zinc-400">({sortedAds[0].type})</span></p>
+            <p className="text-xl font-bold text-white">
+              {sortedAds[0] ? `${sortedAds[0].roas.toFixed(2)}x` : '0.00x'}
+              {sortedAds[0] ? <span className="text-xs font-normal text-zinc-400"> ({sortedAds[0].type})</span> : null}
+            </p>
           </div>
         </div>
         <div className="bg-zinc-900 p-4 rounded-xl border border-zinc-800 flex items-center gap-4">
@@ -136,7 +365,7 @@ const AdAnalysis = ({ targetRoas = 4, targetCpa = 45 }) => {
           </div>
           <div>
             <p className="text-sm text-zinc-500">Requer Atenção</p>
-            <p className="text-xl font-bold text-white">{sortedAds.filter(a => a.status === 'poor').length} <span className="text-xs font-normal text-zinc-400">anúncios críticos</span></p>
+            <p className="text-xl font-bold text-white">{sortedAds.filter(a => a.status === 'poor').length} <span className="text-xs font-normal text-zinc-400">itens críticos</span></p>
           </div>
         </div>
         <div className="bg-zinc-900 p-4 rounded-xl border border-zinc-800 flex items-center gap-4">
@@ -146,7 +375,7 @@ const AdAnalysis = ({ targetRoas = 4, targetCpa = 45 }) => {
           <div>
             <p className="text-sm text-zinc-500">CTR Médio</p>
             <p className="text-xl font-bold text-white">
-              {(sortedAds.reduce((acc, curr) => acc + curr.ctr, 0) / sortedAds.length).toFixed(2)}%
+              {sortedAds.length > 0 ? (sortedAds.reduce((acc, curr) => acc + (curr.ctr || 0), 0) / sortedAds.length).toFixed(2) : '0.00'}%
             </p>
           </div>
         </div>
@@ -156,114 +385,183 @@ const AdAnalysis = ({ targetRoas = 4, targetCpa = 45 }) => {
       <div className="space-y-4">
         <h3 className="text-lg font-semibold text-white flex items-center gap-2">
           <LayoutTemplate className="w-5 h-5 text-zinc-400" />
-          Ranking de Performance dos Anúncios
+          Assets (organizado por tipo)
         </h3>
 
-        <div className="grid gap-4">
-          {sortedAds.map((ad, index) => {
-            const suggestion = getImprovementSuggestion(ad);
-            const SuggestionIcon = suggestion.icon;
+        <div className="space-y-8">
+          {(
+            [
+              { key: 'titulos', label: 'Títulos' },
+              { key: 'descricoes', label: 'Descrições' },
+              { key: 'imagens', label: 'Imagens' },
+              { key: 'videos', label: 'Vídeos' },
+              { key: 'sitelinks', label: 'Sitelinks' },
+              { key: 'callouts', label: 'Callouts' },
+              { key: 'chamadas', label: 'Chamadas' },
+              { key: 'outros', label: 'Outros' },
+            ]
+          ).map((section) => {
+            const items = groupedAds[section.key] || [];
+            if (!items.length) return null;
 
             return (
-              <div 
-                key={ad.id} 
-                className={`bg-zinc-900 rounded-xl border p-5 transition-all hover:border-zinc-700 group ${
-                  ad.status === 'poor' ? 'border-red-900/30' : 
-                  ad.status === 'excellent' ? 'border-emerald-900/30' : 'border-zinc-800'
-                }`}
-              >
-                <div className="flex flex-col lg:flex-row gap-6">
-                  
-                  {/* Ad Content Preview */}
-                  <div className="flex-1 space-y-3">
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border flex items-center gap-1.5 ${getStatusColor(ad.status)}`}>
-                          {getAssetIcon(ad.assetType)}
-                          {ad.status === 'excellent' ? 'Excelente' : ad.status === 'good' ? 'Bom' : ad.status === 'average' ? 'Médio' : 'Ruim'}
-                        </span>
-                        <span className="text-xs text-zinc-500 uppercase tracking-wider">{ad.type}</span>
+              <div key={section.key} className="space-y-3">
+                <div className="flex items-baseline justify-between">
+                  <h4 className="text-sm font-semibold text-zinc-200 uppercase tracking-wider">
+                    {section.label}
+                  </h4>
+                  <span className="text-xs text-zinc-500">{items.length} itens</span>
+                </div>
+
+                <div className="grid gap-4">
+                  {items.map((ad, index) => {
+                    const suggestion = getImprovementSuggestion(ad);
+                    const SuggestionIcon = suggestion.icon;
+
+                    return (
+                      <div
+                        key={ad.id}
+                        className={`bg-zinc-900 rounded-xl border p-5 transition-all hover:border-zinc-700 group ${
+                          ad.status === 'poor'
+                            ? 'border-red-900/30'
+                            : ad.status === 'excellent'
+                              ? 'border-emerald-900/30'
+                              : 'border-zinc-800'
+                        }`}
+                      >
+                        <div className="flex flex-col lg:flex-row gap-6">
+                          <div className="flex-1 space-y-3">
+                            <div className="flex items-start justify-between">
+                              <div className="flex items-center gap-2">
+                                <span
+                                  className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border flex items-center gap-1.5 ${getStatusColor(
+                                    ad.status
+                                  )}`}
+                                >
+                                  {getAssetIcon(ad.assetType)}
+                                  {ad.status === 'excellent'
+                                    ? 'Excelente'
+                                    : ad.status === 'good'
+                                      ? 'Bom'
+                                      : ad.status === 'average'
+                                        ? 'Médio'
+                                        : 'Ruim'}
+                                </span>
+                                <span className="text-xs text-zinc-500 uppercase tracking-wider">{ad.type}</span>
+                              </div>
+                              <div className="text-zinc-500 text-xs font-mono">#{index + 1}</div>
+                            </div>
+
+                            <div>
+                              <h4 className="text-base font-semibold text-white mb-1">{ad.headline}</h4>
+                              <p className="text-sm text-zinc-400 leading-relaxed">{ad.description}</p>
+                            </div>
+
+                            <div
+                              className={`flex items-center gap-2 text-xs px-3 py-2 rounded-lg bg-zinc-950/50 border border-zinc-800/50 w-fit ${suggestion.color}`}
+                            >
+                              <SuggestionIcon className="w-3.5 h-3.5" />
+                              <span className="font-medium">Sugestão:</span> {suggestion.text}
+                            </div>
+                          </div>
+
+                          <div className="hidden lg:block w-px bg-zinc-800" />
+
+                          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-2 xl:grid-cols-4 gap-4 lg:min-w-[480px]">
+                            <div className="space-y-1">
+                              <p className="text-xs text-zinc-500 flex items-center gap-1">
+                                <TrendingUp className="w-3 h-3" /> ROAS
+                              </p>
+                              <p
+                                className={`text-lg font-bold ${
+                                  ad.roas >= 4
+                                    ? 'text-emerald-400'
+                                    : ad.roas < 2
+                                      ? 'text-red-400'
+                                      : 'text-white'
+                                }`}
+                              >
+                                {Number.isFinite(ad.roas) ? ad.roas.toFixed(2) : '0.00'}x
+                              </p>
+                            </div>
+
+                            <div className="space-y-1">
+                              <p className="text-xs text-zinc-500 flex items-center gap-1">
+                                <Target className="w-3 h-3" /> CPA
+                              </p>
+                              <p
+                                className={`text-lg font-bold ${
+                                  ad.cpa > targetCpa * 1.2 ? 'text-red-400' : 'text-white'
+                                }`}
+                              >
+                                R${ad.cpa.toFixed(2)}
+                              </p>
+                            </div>
+
+                            <div className="space-y-1">
+                              <p className="text-xs text-zinc-500 flex items-center gap-1">
+                                <DollarSign className="w-3 h-3" /> Conversões
+                              </p>
+                              <p className="text-lg font-bold text-white">{ad.conversions}</p>
+                            </div>
+
+                            <div className="space-y-1">
+                              <p className="text-xs text-zinc-500 flex items-center gap-1">
+                                <MousePointerClick className="w-3 h-3" /> CTR
+                              </p>
+                              <p
+                                className={`text-lg font-bold ${
+                                  ad.ctr < 1.0 ? 'text-orange-400' : 'text-white'
+                                }`}
+                              >
+                                {Number.isFinite(ad.ctr) ? ad.ctr.toFixed(2) : '0.00'}%
+                              </p>
+                            </div>
+
+                            <div className="space-y-1">
+                              <p className="text-xs text-zinc-500 flex items-center gap-1">
+                                <Eye className="w-3 h-3" /> Impressões
+                              </p>
+                              <p className="text-sm font-medium text-zinc-300">
+                                {ad.impressions.toLocaleString()}
+                              </p>
+                            </div>
+
+                            <div className="space-y-1">
+                              <p className="text-xs text-zinc-500">Cliques</p>
+                              <p className="text-sm font-medium text-zinc-300">
+                                {ad.clicks.toLocaleString()}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex lg:flex-col justify-end">
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  className="h-8 w-8 p-0 text-zinc-400 hover:text-white hover:bg-zinc-800"
+                                >
+                                  <MoreHorizontal className="w-4 h-4" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent
+                                align="end"
+                                className="bg-zinc-900 border-zinc-800 text-zinc-300"
+                              >
+                                <DropdownMenuItem className="focus:bg-zinc-800 cursor-pointer">
+                                  <Copy className="w-4 h-4 mr-2" /> Duplicar Anúncio
+                                </DropdownMenuItem>
+                                <DropdownMenuItem className="focus:bg-zinc-800 cursor-pointer text-red-400 focus:text-red-400">
+                                  Pausar Anúncio
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </div>
+                        </div>
                       </div>
-                      <div className="text-zinc-500 text-xs font-mono">#{index + 1}</div>
-                    </div>
-
-                    <div>
-                      <h4 className="text-base font-semibold text-blue-400 mb-1 group-hover:underline cursor-pointer">
-                        {ad.headline}
-                      </h4>
-                      <p className="text-sm text-zinc-400 leading-relaxed">
-                        {ad.description}
-                      </p>
-                    </div>
-
-                    {/* Recommendation Badge */}
-                    <div className={`flex items-center gap-2 text-xs px-3 py-2 rounded-lg bg-zinc-950/50 border border-zinc-800/50 w-fit ${suggestion.color}`}>
-                      <SuggestionIcon className="w-3.5 h-3.5" />
-                      <span className="font-medium">Sugestão:</span> {suggestion.text}
-                    </div>
-                  </div>
-
-                  {/* Vertical Divider */}
-                  <div className="hidden lg:block w-px bg-zinc-800" />
-
-                  {/* Metrics Grid */}
-                  <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-2 xl:grid-cols-4 gap-4 lg:min-w-[480px]">
-                    <div className="space-y-1">
-                      <p className="text-xs text-zinc-500 flex items-center gap-1"><TrendingUp className="w-3 h-3" /> ROAS</p>
-                      <p className={`text-lg font-bold ${ad.roas >= 4 ? 'text-emerald-400' : ad.roas < 2 ? 'text-red-400' : 'text-white'}`}>
-                        {ad.roas}x
-                      </p>
-                    </div>
-                    
-                    <div className="space-y-1">
-                      <p className="text-xs text-zinc-500 flex items-center gap-1"><Target className="w-3 h-3" /> CPA</p>
-                      <p className={`text-lg font-bold ${ad.cpa > targetCpa * 1.2 ? 'text-red-400' : 'text-white'}`}>
-                        R${ad.cpa.toFixed(2)}
-                      </p>
-                    </div>
-
-                    <div className="space-y-1">
-                      <p className="text-xs text-zinc-500 flex items-center gap-1"><DollarSign className="w-3 h-3" /> Conversões</p>
-                      <p className="text-lg font-bold text-white">{ad.conversions}</p>
-                    </div>
-
-                    <div className="space-y-1">
-                      <p className="text-xs text-zinc-500 flex items-center gap-1"><MousePointerClick className="w-3 h-3" /> CTR</p>
-                      <p className={`text-lg font-bold ${ad.ctr < 1.0 ? 'text-orange-400' : 'text-white'}`}>
-                        {ad.ctr}%
-                      </p>
-                    </div>
-
-                    <div className="space-y-1">
-                      <p className="text-xs text-zinc-500 flex items-center gap-1"><Eye className="w-3 h-3" /> Impressões</p>
-                      <p className="text-sm font-medium text-zinc-300">{ad.impressions.toLocaleString()}</p>
-                    </div>
-
-                     <div className="space-y-1">
-                      <p className="text-xs text-zinc-500">Cliques</p>
-                      <p className="text-sm font-medium text-zinc-300">{ad.clicks.toLocaleString()}</p>
-                    </div>
-                  </div>
-
-                  {/* Actions */}
-                  <div className="flex lg:flex-col justify-end">
-                     <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" className="h-8 w-8 p-0 text-zinc-400 hover:text-white hover:bg-zinc-800">
-                          <MoreHorizontal className="w-4 h-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="bg-zinc-900 border-zinc-800 text-zinc-300">
-                        <DropdownMenuItem className="focus:bg-zinc-800 cursor-pointer">
-                          <Copy className="w-4 h-4 mr-2" /> Duplicar Anúncio
-                        </DropdownMenuItem>
-                        <DropdownMenuItem className="focus:bg-zinc-800 cursor-pointer text-red-400 focus:text-red-400">
-                           Pausar Anúncio
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
-
+                    );
+                  })}
                 </div>
               </div>
             );

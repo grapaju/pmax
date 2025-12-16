@@ -18,7 +18,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import CampaignDiagnostics from '@/components/CampaignDiagnostics';
 import CampaignOptimizationTips from '@/components/CampaignOptimizationTips';
 import ExportPDF from '@/components/ExportPDF';
-import GoogleAdsSync from '@/components/GoogleAdsSync';
 import WeekOverWeekComparison from '@/components/WeekOverWeekComparison';
 import CampaignSelector from '@/components/CampaignSelector';
 import AdAnalysis from '@/components/AdAnalysis';
@@ -206,6 +205,37 @@ const CampaignDashboard = ({
   const [period, setPeriod] = useState('all');
   const [selectedPoint, setSelectedPoint] = useState(null);
 
+  const computeTotalsFromRaw = (rawRows) => {
+    const totals = (rawRows || []).reduce(
+      (acc, r) => {
+        acc.spend += Number(r.spend || 0);
+        acc.conversions += Number(r.conversions || 0);
+        acc.value += Number(r.value || 0);
+        acc.clicks += Number(r.clicks || 0);
+        acc.impressions += Number(r.impressions || 0);
+        return acc;
+      },
+      { spend: 0, conversions: 0, value: 0, clicks: 0, impressions: 0 }
+    );
+
+    const roas = totals.spend > 0 ? totals.value / totals.spend : 0;
+    const cpa = totals.conversions > 0 ? totals.spend / totals.conversions : 0;
+    const ctr = totals.impressions > 0 ? (totals.clicks / totals.impressions) * 100 : 0;
+    const cpc = totals.clicks > 0 ? totals.spend / totals.clicks : 0;
+
+    return { ...totals, roas, cpa, ctr, cpc };
+  };
+
+  const addDays = (ymd, days) => {
+    const [y, m, d] = String(ymd).split('-').map(Number);
+    const dt = new Date(y, (m || 1) - 1, d || 1);
+    dt.setDate(dt.getDate() + days);
+    const yyyy = dt.getFullYear();
+    const mm = String(dt.getMonth() + 1).padStart(2, '0');
+    const dd = String(dt.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  };
+
   const viewMetrics = useMemo(() => {
     if (!data) return null;
     
@@ -216,42 +246,41 @@ const CampaignDashboard = ({
        };
     }
 
-    const factor = period === '7d' ? 0.25 : 1.0; 
-    const prevFactor = 0.9 + Math.random() * 0.2; 
+    const days = period === '7d' ? 7 : 30;
+    const raw = Array.isArray(data.raw) ? data.raw : [];
+    const sorted = [...raw].filter(r => r?.date).sort((a, b) => String(a.date).localeCompare(String(b.date)));
 
-    const current = {
-      spend: data.totals.spend * factor,
-      conversions: Math.round(data.totals.conversions * factor),
-      value: data.totals.value * factor,
-      clicks: Math.round(data.totals.clicks * factor),
-      impressions: Math.round(data.totals.impressions * factor),
-      roas: data.totals.roas, 
-      cpa: data.totals.cpa,
-      ctr: data.totals.ctr,
-      cpc: data.totals.cpc
-    };
+    if (sorted.length === 0) {
+      return { totals: data.totals, comparison: null };
+    }
 
-    const previous = {
-      spend: current.spend * prevFactor,
-      conversions: current.conversions * prevFactor,
-      value: current.value * prevFactor,
-      roas: current.roas * (0.95 + Math.random() * 0.1),
-      cpa: current.cpa * (0.95 + Math.random() * 0.1),
-      clicks: current.clicks * prevFactor,
-      impressions: current.impressions * prevFactor,
-      cpc: current.cpc,
-      ctr: current.ctr
+    const end = sorted[sorted.length - 1].date;
+    const start = addDays(end, -(days - 1));
+    const prevEnd = addDays(start, -1);
+    const prevStart = addDays(prevEnd, -(days - 1));
+
+    const currentRows = sorted.filter(r => r.date >= start && r.date <= end);
+    const prevRows = sorted.filter(r => r.date >= prevStart && r.date <= prevEnd);
+
+    const current = computeTotalsFromRaw(currentRows);
+    const previous = computeTotalsFromRaw(prevRows);
+
+    const pct = (curr, prev) => {
+      const p = Number(prev || 0);
+      const c = Number(curr || 0);
+      if (!Number.isFinite(p) || p === 0) return null;
+      return ((c - p) / p) * 100;
     };
 
     return {
       totals: current,
       comparison: {
-        roas: { change: ((current.roas - previous.roas)/previous.roas)*100, prevValue: previous.roas },
-        cpa: { change: ((current.cpa - previous.cpa)/previous.cpa)*100, prevValue: previous.cpa },
-        conversions: { change: ((current.conversions - previous.conversions)/previous.conversions)*100, prevValue: previous.conversions },
-        spend: { change: ((current.spend - previous.spend)/previous.spend)*100, prevValue: previous.spend },
-        ctr: { change: ((current.ctr - previous.ctr)/previous.ctr)*100, prevValue: previous.ctr },
-        cpc: { change: ((current.cpc - previous.cpc)/previous.cpc)*100, prevValue: previous.cpc }
+        roas: { change: pct(current.roas, previous.roas), prevValue: previous.roas },
+        cpa: { change: pct(current.cpa, previous.cpa), prevValue: previous.cpa },
+        conversions: { change: pct(current.conversions, previous.conversions), prevValue: previous.conversions },
+        spend: { change: pct(current.spend, previous.spend), prevValue: previous.spend },
+        ctr: { change: pct(current.ctr, previous.ctr), prevValue: previous.ctr },
+        cpc: { change: pct(current.cpc, previous.cpc), prevValue: previous.cpc }
       }
     };
 
@@ -327,21 +356,20 @@ const CampaignDashboard = ({
     setUploadInfo({ uploadDate: new Date().toLocaleDateString(), periodStart: rawData[0]?.date || 'N/A', periodEnd: rawData[rawData.length-1]?.date || 'N/A' });
   };
 
-  const handleSyncComplete = async (syncedData) => {
-      setData(syncedData);
-      setUploadInfo({
-          uploadDate: new Date().toLocaleDateString(),
-          periodStart: syncedData.meta.periodStart,
-          periodEnd: syncedData.meta.periodEnd
-      });
-      // Auto save on sync
-      await saveDataToSupabase(syncedData);
-  };
-
   const saveDataToSupabase = async (dataToSave = data) => {
     if (!dataToSave || !selectedCampaignId) {
         toast({ title: "Erro", description: "Dados ou Campanha inválidos.", variant: "destructive" });
         return;
+    }
+
+    const isUuid = (v) => typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
+    if (!isUuid(String(selectedCampaignId))) {
+      toast({
+        title: "Ação indisponível",
+        description: "Este painel está em modo de dados do Google Ads (ingest). Salvar aqui só funciona para campanhas internas/CSV.",
+        variant: "destructive",
+      });
+      return;
     }
     
     setIsSaving(true);
@@ -461,15 +489,6 @@ const CampaignDashboard = ({
             </div>
 
             <div className="h-6 w-px bg-zinc-800 hidden sm:block mx-2" />
-
-            {!readOnly && selectedCampaignId && (
-               <GoogleAdsSync 
-                  campaignId={selectedCampaignId} 
-                  onSyncComplete={handleSyncComplete} 
-                  clientId={clientId}
-                  googleAdsId={client?.google_ads_customer_id} 
-               />
-            )}
 
             {!readOnly && (
                  <Button variant="outline" onClick={copyShareLink} className="bg-indigo-950 border-indigo-900 text-indigo-200 hover:bg-indigo-900 gap-2">
@@ -623,15 +642,36 @@ const CampaignDashboard = ({
           </TabsContent>
 
           <TabsContent value="ads">
-             {!data ? <NoDataView /> : <AdAnalysis targetRoas={data.targets.roas} targetCpa={data.targets.cpa} />}
+             {!data ? <NoDataView /> : (
+               <AdAnalysis
+                 clientId={clientId}
+                 campaignId={selectedCampaignId}
+                 period={period}
+                 targetRoas={data.targets.roas}
+                 targetCpa={data.targets.cpa}
+               />
+             )}
           </TabsContent>
 
           <TabsContent value="client-overview">
-             {client && <DetailedMetrics client={client} />}
+             {clientId && (
+               <DetailedMetrics
+                 clientId={clientId}
+                 campaignId={selectedCampaignId}
+                 period={period}
+               />
+             )}
           </TabsContent>
 
           <TabsContent value="history">
-             {client && <CampaignHistory clients={allClients} selectedClient={client} />}
+             {clientId && (
+               <CampaignHistory
+                 clients={allClients}
+                 selectedClient={client}
+                 clientId={clientId}
+                 campaignId={selectedCampaignId}
+               />
+             )}
           </TabsContent>
         </Tabs>
 

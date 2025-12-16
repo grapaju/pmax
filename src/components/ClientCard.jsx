@@ -38,7 +38,13 @@ const ClientCard = ({ client, index, onClick }) => {
           roas >= 2 ? "bg-blue-500/10 text-blue-400" :
           "bg-orange-500/10 text-orange-400"
         )}>
-          ROAS {roas.toFixed(2)}x
+          <abbr
+            title="ROAS = Retorno sobre o gasto com anúncios (valor de conversão ÷ custo)."
+            className="underline decoration-dotted underline-offset-2 cursor-help"
+          >
+            ROAS
+          </abbr>{' '}
+          {roas.toFixed(2)}x
         </div>
       </div>
 

@@ -10,12 +10,51 @@ import TicketsSystem from '@/components/TicketsSystem';
 import CampaignSelector from '@/components/CampaignSelector';
 import { supabase } from '@/lib/customSupabaseClient';
 import { toast } from '@/components/ui/use-toast';
+import { fetchGoogleAdsTotalsByClientIds } from '@/lib/googleAdsDashboardLoader';
 
 const ClientDashboard = ({ user, onLogout }) => {
   const [clientData, setClientData] = useState(null);
   const [selectedPeriod, setSelectedPeriod] = useState('30d');
   const [isTicketsOpen, setIsTicketsOpen] = useState(false);
   const [unreadTickets, setUnreadTickets] = useState(0);
+
+  const hydrateCampaignTotals = async (client) => {
+    if (!client?.id) return;
+
+    let totalsByClient = new Map();
+    try {
+      totalsByClient = await fetchGoogleAdsTotalsByClientIds([client.id], selectedPeriod);
+    } catch (e) {
+      console.warn('Não foi possível carregar google_ads_metrics (cliente):', e?.message || e);
+      return;
+    }
+
+    const totals = totalsByClient.get(client.id);
+    if (!totals) return;
+
+    setClientData((prev) => {
+      const base = prev || client;
+      return {
+        ...base,
+        campaigns: (base.campaigns || []).map((c) => ({
+          ...c,
+          data: {
+            ...(c.data || {}),
+            __googleAdsLive: true,
+            spend: totals.spend,
+            impressions: totals.impressions,
+            clicks: totals.clicks,
+            conversions: totals.conversions,
+            conversionValue: totals.conversionValue,
+            roas: totals.spend > 0 ? totals.conversionValue / totals.spend : 0,
+            cpa: totals.conversions > 0 ? totals.spend / totals.conversions : 0,
+            ctr: totals.impressions > 0 ? (totals.clicks / totals.impressions) * 100 : 0,
+            avgCpc: totals.clicks > 0 ? totals.spend / totals.clicks : 0,
+          },
+        })),
+      };
+    });
+  };
 
   useEffect(() => {
     const fetchClientData = async () => {
@@ -36,6 +75,7 @@ const ClientDashboard = ({ user, onLogout }) => {
          }
          
          setClientData(client);
+         await hydrateCampaignTotals(client);
        } catch (err) {
          console.error("Unexpected error:", err);
        }
@@ -45,6 +85,33 @@ const ClientDashboard = ({ user, onLogout }) => {
         fetchClientData();
     }
   }, [user]);
+
+  useEffect(() => {
+    if (!clientData?.id) return;
+    hydrateCampaignTotals(clientData);
+  }, [clientData?.id, selectedPeriod]);
+
+  useEffect(() => {
+    if (!clientData?.id) return;
+
+    const channel = supabase
+      .channel('client-google-ads-ingest')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'google_ads_activity_log' },
+        (payload) => {
+          const row = payload?.new;
+          if (!row || row.action !== 'script_ingest') return;
+          if (row.client_id !== clientData.id) return;
+          hydrateCampaignTotals(clientData);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [clientData?.id, selectedPeriod]);
 
   if (!clientData) {
     return (
@@ -70,16 +137,17 @@ const ClientDashboard = ({ user, onLogout }) => {
       name: clientData.client_name, // Map client_name to name for compatibility
       campaigns: (clientData.campaigns || []).map(c => {
          const baseData = c.data || {};
+        const factor = baseData.__googleAdsLive ? 1 : multiplier;
          return {
             ...baseData,
             id: c.id,
             name: c.name,
             budget: c.budget,
-            spend: Math.round((baseData.spend || 0) * multiplier),
-            impressions: Math.round((baseData.impressions || 0) * multiplier),
-            clicks: Math.round((baseData.clicks || 0) * multiplier),
-            conversions: Math.round((baseData.conversions || 0) * multiplier),
-            conversionValue: Math.round((baseData.conversionValue || 0) * multiplier),
+          spend: Math.round((baseData.spend || 0) * factor),
+          impressions: Math.round((baseData.impressions || 0) * factor),
+          clicks: Math.round((baseData.clicks || 0) * factor),
+          conversions: Math.round((baseData.conversions || 0) * factor),
+          conversionValue: Math.round((baseData.conversionValue || 0) * factor),
          };
       })
     };

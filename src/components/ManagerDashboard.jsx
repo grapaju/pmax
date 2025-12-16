@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { LogOut, Plus, Users, LayoutDashboard, ChevronLeft, AlertCircle, CheckCircle2, MessageSquare, Settings } from 'lucide-react';
+import { LogOut, Plus, Users, LayoutDashboard, ChevronLeft, AlertCircle, CheckCircle2, MessageSquare } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import ClientCard from '@/components/ClientCard';
 import AddClientDialog from '@/components/AddClientDialog';
@@ -8,21 +8,21 @@ import PerformanceAlerts from '@/components/PerformanceAlerts';
 import MetricCard from '@/components/MetricCard';
 import TicketsSystem from '@/components/TicketsSystem';
 import CampaignDashboard from '@/components/CampaignDashboard';
-import GoogleAdsSettingsDialog from '@/components/GoogleAdsSettingsDialog';
 import { supabase } from '@/lib/customSupabaseClient';
 import { toast } from '@/components/ui/use-toast';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
+import { fetchGoogleAdsTotalsByClientIds, fetchCampaignDashboardData, fetchGoogleAdsCampaignsByClientId } from '@/lib/googleAdsDashboardLoader';
 
 const ManagerDashboard = ({ user }) => {
   const { signOut } = useAuth();
   const [clients, setClients] = useState([]);
   const [isAddClientOpen, setIsAddClientOpen] = useState(false);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [selectedClient, setSelectedClient] = useState(null);
   const [selectedPeriod, setSelectedPeriod] = useState('30d');
   const [isTicketsOpen, setIsTicketsOpen] = useState(false);
   const [unreadTickets, setUnreadTickets] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [refreshKey, setRefreshKey] = useState(0);
   
   // Campaign Selection State
   const [clientCampaigns, setClientCampaigns] = useState([]);
@@ -32,7 +32,7 @@ const ManagerDashboard = ({ user }) => {
     if (user) {
         fetchClients();
     }
-  }, [user]);
+  }, [user, selectedPeriod]);
 
   const fetchClients = async () => {
     setLoading(true);
@@ -47,7 +47,45 @@ const ManagerDashboard = ({ user }) => {
         .eq('owner_id', user.id);
 
       if (error) throw error;
-      setClients(data || []);
+
+      // Enriquecer campanhas com totais reais (google_ads_metrics) no período selecionado
+      const baseClients = data || [];
+      const ids = baseClients.map((c) => c.id).filter(Boolean);
+
+      let totalsByClient = new Map();
+      try {
+        totalsByClient = await fetchGoogleAdsTotalsByClientIds(ids, selectedPeriod);
+      } catch (e) {
+        // Se RLS/config ainda não permitir, mantemos o fallback sem quebrar o dashboard.
+        console.warn('Não foi possível carregar google_ads_metrics para cards:', e?.message || e);
+      }
+
+      const hydrated = baseClients.map((client) => {
+        const totals = totalsByClient.get(client.id);
+        if (!totals) return client;
+
+        return {
+          ...client,
+          campaigns: (client.campaigns || []).map((c) => ({
+            ...c,
+            data: {
+              ...(c.data || {}),
+              __googleAdsLive: true,
+              spend: totals.spend,
+              impressions: totals.impressions,
+              clicks: totals.clicks,
+              conversions: totals.conversions,
+              conversionValue: totals.conversionValue,
+              roas: totals.spend > 0 ? totals.conversionValue / totals.spend : 0,
+              cpa: totals.conversions > 0 ? totals.spend / totals.conversions : 0,
+              ctr: totals.impressions > 0 ? (totals.clicks / totals.impressions) * 100 : 0,
+              avgCpc: totals.clicks > 0 ? totals.spend / totals.clicks : 0,
+            },
+          })),
+        };
+      });
+
+      setClients(hydrated);
     } catch (error) {
       console.error('Error fetching clients:', error);
       toast({
@@ -60,22 +98,56 @@ const ManagerDashboard = ({ user }) => {
     }
   };
 
+  // Auto-refresh quando o script ingerir novos dados
+  useEffect(() => {
+    if (!user) return;
+
+    const channel = supabase
+      .channel('manager-google-ads-ingest')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'google_ads_activity_log' },
+        (payload) => {
+          const row = payload?.new;
+          if (!row || row.action !== 'script_ingest') return;
+          // Recarrega cards/visão quando houver novo ingest
+          fetchClients();
+          setRefreshKey((k) => k + 1);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user, selectedPeriod]);
+
   // Update campaigns when client changes
   useEffect(() => {
-    if (selectedClient) {
-        // Find the fresh data from the clients array
-        const currentClient = clients.find(c => c.id === selectedClient.id);
-        if (currentClient && currentClient.campaigns) {
-             setClientCampaigns(currentClient.campaigns);
-             if (currentClient.campaigns.length > 0 && !selectedCampaignId) {
-                setSelectedCampaignId(currentClient.campaigns[0].id);
-             }
-        }
-    } else {
+    const load = async () => {
+      if (!selectedClient?.id) {
         setClientCampaigns([]);
         setSelectedCampaignId(null);
-    }
-  }, [selectedClient, clients]);
+        return;
+      }
+
+      try {
+        const googleCampaigns = await fetchGoogleAdsCampaignsByClientId(selectedClient.id);
+        setClientCampaigns(googleCampaigns);
+        if (googleCampaigns.length > 0) {
+          setSelectedCampaignId((prev) => prev || googleCampaigns[0].id);
+        } else {
+          setSelectedCampaignId(null);
+        }
+      } catch (e) {
+        console.warn('Falha ao carregar google_ads_campaigns:', e?.message || e);
+        setClientCampaigns([]);
+        setSelectedCampaignId(null);
+      }
+    };
+
+    load();
+  }, [selectedClient?.id]);
 
   const handleAddClient = async (newClientData) => {
     try {
@@ -127,17 +199,18 @@ const ManagerDashboard = ({ user }) => {
     return clients.map(client => {
       const mappedCampaigns = (client.campaigns || []).map(c => {
          const baseData = c.data || {};
+        const factor = baseData.__googleAdsLive ? 1 : multiplier;
          return {
             ...baseData,
             id: c.id,
             name: c.name,
             budget: c.budget,
             status: c.status,
-            spend: Math.round((baseData.spend || 0) * multiplier),
-            impressions: Math.round((baseData.impressions || 0) * multiplier),
-            clicks: Math.round((baseData.clicks || 0) * multiplier),
-            conversions: Math.round((baseData.conversions || 0) * multiplier),
-            conversionValue: Math.round((baseData.conversionValue || 0) * multiplier),
+          spend: Math.round((baseData.spend || 0) * factor),
+          impressions: Math.round((baseData.impressions || 0) * factor),
+          clicks: Math.round((baseData.clicks || 0) * factor),
+          conversions: Math.round((baseData.conversions || 0) * factor),
+          conversionValue: Math.round((baseData.conversionValue || 0) * factor),
          };
       });
 
@@ -158,7 +231,31 @@ const ManagerDashboard = ({ user }) => {
     : null;
     
   const currentCampaign = clientCampaigns.find(c => c.id === selectedCampaignId);
-  const currentCampaignData = currentCampaign ? { ...currentCampaign.data, id: currentCampaign.id, name: currentCampaign.name, budget: currentCampaign.budget } : null;
+  const [currentCampaignData, setCurrentCampaignData] = useState(null);
+
+  useEffect(() => {
+    const load = async () => {
+      if (!currentViewClient?.id) {
+        setCurrentCampaignData(null);
+        return;
+      }
+      try {
+        const dashboardData = await fetchCampaignDashboardData({ clientId: currentViewClient.id, period: selectedPeriod, campaignId: selectedCampaignId });
+        setCurrentCampaignData({
+          ...(dashboardData || {}),
+          id: selectedCampaignId,
+          name: currentCampaign?.name,
+          budget: null,
+        });
+      } catch (e) {
+        console.warn('Falha ao carregar dashboard google_ads_metrics:', e?.message || e);
+        // fallback: mantém o que já existia no campaign.data
+        setCurrentCampaignData(null);
+      }
+    };
+
+    load();
+  }, [currentViewClient?.id, selectedPeriod, selectedCampaignId, refreshKey, clientCampaigns.length]);
 
   const totalSpend = filteredClients.reduce((sum, client) => 
     sum + client.campaigns.reduce((cSum, c) => cSum + (c.spend || 0), 0), 0
@@ -191,17 +288,6 @@ const ManagerDashboard = ({ user }) => {
               </div>
             </div>
             <div className="flex items-center gap-3">
-              {!selectedClient && (
-                <Button
-                  onClick={() => setIsSettingsOpen(true)}
-                  variant="ghost"
-                  size="icon"
-                  className="text-zinc-400 hover:text-white hover:bg-zinc-800"
-                  title="Configurar Integrações"
-                >
-                  <Settings className="w-5 h-5" />
-                </Button>
-              )}
               <Button
                 onClick={() => setIsTicketsOpen(true)}
                 variant="outline"
@@ -329,12 +415,6 @@ const ManagerDashboard = ({ user }) => {
         isOpen={isAddClientOpen}
         onClose={() => setIsAddClientOpen(false)}
         onAdd={handleAddClient}
-      />
-
-      <GoogleAdsSettingsDialog
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        clientId={selectedClient?.id}
       />
       
       {isTicketsOpen && (
