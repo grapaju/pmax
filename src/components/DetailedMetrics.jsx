@@ -272,6 +272,133 @@ const DetailedMetrics = ({ clientId, campaignId, period = 'all' }) => {
     };
   }, [rows, searchInsightRows, shoppingRows, audienceSignalRows]);
 
+  const recommendations = useMemo(() => {
+    function formatMoneyBRL(value) {
+      const n = Number(value) || 0;
+      return n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function formatInt(value) {
+      const n = Math.round(Number(value) || 0);
+      return n.toLocaleString('pt-BR');
+    }
+
+    const recs = [];
+
+    // 1) Assets LOW com custo/volume
+    let lowCount = 0;
+    let lowCost = 0;
+    const lowByGroup = new Map();
+    for (const r of rows || []) {
+      const pl = String(r.performance_label || '').toUpperCase();
+      if (pl !== 'LOW') continue;
+      lowCount += 1;
+      lowCost += Number(r.cost) || 0;
+      const g = String(r.asset_group_name || r.asset_group_id || 'Grupo de Recursos').trim();
+      const cur = lowByGroup.get(g) || { name: g, cost: 0, count: 0 };
+      cur.cost += Number(r.cost) || 0;
+      cur.count += 1;
+      lowByGroup.set(g, cur);
+    }
+    const topLowGroup = Array.from(lowByGroup.values()).sort((a, b) => b.cost - a.cost)[0];
+    if (lowCount > 0 && lowCost > 0) {
+      recs.push({
+        title: 'Trocar assets marcados como LOW',
+        kind: 'warning',
+        description: `Há ${formatInt(lowCount)} recursos LOW consumindo ~R$${formatMoneyBRL(lowCost)} no período. ` +
+          (topLowGroup ? `Priorize o grupo “${topLowGroup.name}”.` : 'Priorize os grupos com mais volume.'),
+      });
+    }
+
+    // 2) Replicar padrões de BEST/GOOD com valor
+    let bestGoodCount = 0;
+    let bestGoodValue = 0;
+    const byFieldType = new Map();
+    for (const r of rows || []) {
+      const pl = String(r.performance_label || '').toUpperCase();
+      if (pl !== 'BEST' && pl !== 'GOOD') continue;
+      bestGoodCount += 1;
+      bestGoodValue += Number(r.conversion_value) || 0;
+      const ft = String(r.field_type || 'UNKNOWN').trim();
+      const cur = byFieldType.get(ft) || { fieldType: ft, value: 0, count: 0 };
+      cur.value += Number(r.conversion_value) || 0;
+      cur.count += 1;
+      byFieldType.set(ft, cur);
+    }
+    const topField = Array.from(byFieldType.values()).sort((a, b) => b.value - a.value)[0];
+    if (bestGoodCount > 0 && bestGoodValue > 0) {
+      recs.push({
+        title: 'Criar variações dos recursos vencedores',
+        kind: 'success',
+        description: `Recursos BEST/GOOD somaram ~R$${formatMoneyBRL(bestGoodValue)} em valor. ` +
+          (topField ? `Crie variações semelhantes de “${topField.fieldType}”.` : 'Crie variações semelhantes dos vencedores.'),
+      });
+    }
+
+    // 3) Cobertura de Audience Signals (não temos conversão por sinal neste ambiente)
+    const groupsWithSignals = new Set();
+    for (const r of audienceSignalRows || []) {
+      const key = String(r.asset_group_id || r.asset_group_name || '').trim();
+      if (key) groupsWithSignals.add(key);
+    }
+    const groupsInAssets = new Set();
+    for (const r of rows || []) {
+      const key = String(r.asset_group_id || r.asset_group_name || '').trim();
+      if (key) groupsInAssets.add(key);
+    }
+    if (groupsInAssets.size > 0) {
+      let missingSignals = 0;
+      groupsInAssets.forEach((g) => {
+        if (!groupsWithSignals.has(g)) missingSignals += 1;
+      });
+      if (missingSignals > 0) {
+        recs.push({
+          title: 'Adicionar/fortalecer sinais de público (inputs)',
+          kind: 'info',
+          description: `${formatInt(missingSignals)} grupos aparecem nos assets, mas não têm sinais capturados no período. ` +
+            'Considere subir listas (customer match) e audiências relevantes por asset group.',
+        });
+      }
+    }
+
+    // 4) Categorias vencedoras (Insights)
+    const catMap = new Map();
+    for (const r of searchInsightRows || []) {
+      const label = String(r.category_label || '').trim();
+      if (!label) continue;
+      const cur = catMap.get(label) || { label, conversions: 0, value: 0, clicks: 0, impressions: 0 };
+      cur.conversions += Number(r.conversions) || 0;
+      cur.value += Number(r.conversion_value) || 0;
+      cur.clicks += Number(r.clicks) || 0;
+      cur.impressions += Number(r.impressions) || 0;
+      catMap.set(label, cur);
+    }
+    const topCat = Array.from(catMap.values()).sort((a, b) => (b.value - a.value) || (b.conversions - a.conversions))[0];
+    if (topCat && (topCat.value > 0 || topCat.conversions > 0)) {
+      recs.push({
+        title: 'Expandir categoria vencedora',
+        kind: 'success',
+        description: `A categoria “${topCat.label}” gerou ~R$${formatMoneyBRL(topCat.value)} (${formatInt(topCat.conversions)} conv.). ` +
+          'Vale testar Search/DSA focado em termos relacionados para ganhar controle.',
+      });
+    }
+
+    // 5) Categoria com volume e 0 conversão (ajuste de inputs)
+    const worstCat = Array.from(catMap.values())
+      .filter((c) => (Number(c.clicks) || 0) >= 20 && (Number(c.conversions) || 0) === 0)
+      .sort((a, b) => (b.clicks - a.clicks) || (b.impressions - a.impressions))[0];
+    if (worstCat) {
+      recs.push({
+        title: 'Reduzir tráfego desalinhado por categoria (inputs)',
+        kind: 'warning',
+        description: `A categoria “${worstCat.label}” teve ${formatInt(worstCat.clicks)} cliques e 0 conv. ` +
+          'Revise criativos, landing page e segmentação/sinais desse asset group.',
+      });
+    }
+
+    return recs.slice(0, 6);
+  }, [rows, searchInsightRows, audienceSignalRows]);
+
   const avgIS = { search: 0, budget: 0, rank: 0 };
 
   return (
@@ -282,6 +409,47 @@ const DetailedMetrics = ({ clientId, campaignId, period = 'all' }) => {
         </div>
       )}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+
+        {/* Automatic Recommendations */}
+        <DetailSection title="Recomendações automáticas" icon={AlertCircle}>
+          {recommendations.length > 0 ? (
+            <div className="space-y-2">
+              {recommendations.map((rec, idx) => (
+                <div
+                  key={idx}
+                  className="p-3 bg-zinc-950/50 border border-zinc-800 rounded-lg"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="text-sm font-medium text-white">{rec.title}</p>
+                    <span
+                      className={`text-[10px] px-2 py-0.5 rounded-full whitespace-nowrap ${
+                        rec.kind === 'success'
+                          ? 'bg-emerald-500/20 text-emerald-400'
+                          : rec.kind === 'warning'
+                          ? 'bg-orange-500/20 text-orange-400'
+                          : 'bg-zinc-500/20 text-zinc-300'
+                      }`}
+                    >
+                      {rec.kind === 'success' ? 'Oportunidade' : rec.kind === 'warning' ? 'Atenção' : 'Sugestão'}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs text-zinc-300">{rec.description}</p>
+                </div>
+              ))}
+              <p className="text-[11px] text-zinc-500">
+                Obs: “Audience Signals” aqui é um proxy de inputs (sem performance por sinal neste ambiente).
+              </p>
+            </div>
+          ) : (
+            <div className="mt-1 p-3 bg-zinc-950/50 border border-zinc-800 rounded-lg text-xs text-zinc-300 flex gap-2">
+              <AlertCircle className="w-4 h-4 flex-shrink-0 text-zinc-500" />
+              <p>
+                Sem dados suficientes para gerar recomendações ainda. Rode o script e confirme que há linhas em
+                <span className="text-zinc-200"> google_ads_assets</span> e/ou <span className="text-zinc-200">google_ads_pmax_*</span>.
+              </p>
+            </div>
+          )}
+        </DetailSection>
         
         {/* Impression Share Metrics */}
         <DetailSection title="Análise de Parcela de Impressões" icon={BarChart3}>
