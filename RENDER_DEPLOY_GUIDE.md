@@ -33,6 +33,14 @@ Configure no Render (aba *Environment*):
   - Ex.: `https://seu-frontend.onrender.com`
   - Ex.: `https://a.com,https://b.com`
 
+Para as suas URLs atuais:
+- Backend: `https://pmax.onrender.com`
+- Frontend: `https://frontend-pmax.onrender.com`
+
+Use:
+- `PUBLIC_BASE_URL=https://pmax.onrender.com`
+- `CORS_ORIGIN=https://frontend-pmax.onrender.com`
+
 Notas importantes:
 - `CORS_ORIGIN` só afeta requisições do navegador (frontend). O Google Ads Script (UrlFetchApp) normalmente não envia header `Origin`, então não é bloqueado pelo CORS.
 - Se você deixar `CORS_ORIGIN` vazio, o backend aceita qualquer origem (útil em dev; em produção prefira configurar).
@@ -86,7 +94,7 @@ Exemplo (se existir no seu app):
 ## 3) Google Ads Script → Backend
 
 Use a URL do backend no Render:
-- `https://seu-backend.onrender.com/api/google-ads/script-ingest/bulk`
+- `https://pmax.onrender.com/api/google-ads/script-ingest/bulk`
 
 E envie o header:
 - `x-import-key: <GOOGLE_ADS_SCRIPT_IMPORT_KEY>`
@@ -98,3 +106,6 @@ E envie o header:
 - Google Ads Script consegue fazer `UrlFetchApp.fetch(...)` para o endpoint
 
 Se você quiser, eu gero um exemplo completo de Google Ads Script (MCC) que envia `campaignsRows/metricsRows/adsRows/assetsRows` no formato do endpoint.
+
+Script pronto neste repositório:
+- google-ads-scripts/mcc-pmax-export.gs

@@ -90,9 +90,10 @@ function mapMetricsRow(row, { fallbackStart, fallbackEnd, fallbackCampaignId }) 
   const conversions = parseNumber(pick(row, ['conversions', 'conversoes', 'conversões'])) ?? 0;
   const conversionValue = parseNumber(pick(row, ['conversion_value', 'conversionValue', 'valor_conversao', 'valor de conversao', 'valor de conversão'])) ?? 0;
 
-  const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
+  // No schema (DECIMAL(5,4)), CTR e conversion_rate são armazenados como fração (0..1), não em % (0..100).
+  const ctr = impressions > 0 ? clicks / impressions : 0;
   const avgCpc = clicks > 0 ? cost / clicks : 0;
-  const conversionRate = clicks > 0 ? (conversions / clicks) * 100 : 0;
+  const conversionRate = clicks > 0 ? conversions / clicks : 0;
   const cpa = conversions > 0 ? cost / conversions : 0;
   const roas = cost > 0 ? conversionValue / cost : 0;
 
